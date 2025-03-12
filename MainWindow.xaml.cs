@@ -1,0 +1,636 @@
+﻿using DirectXTexNet;
+using KCDTextureExporter.DDS;
+using Microsoft.Win32;
+using System.Configuration;
+using System.IO;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Xml.Linq;
+using System.Xml;
+
+namespace KCDTextureExporter
+{
+    /// <summary>
+    /// Interaction logic for MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow : Window
+    {
+        public MainWindow()
+        {
+            InitializeComponent();
+
+            TexHelper.LoadInstance();
+
+            ReadSettingsFile();
+        }
+
+        private void Button_Convert_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                bool IsInputFolder = false;
+                bool IsOutputFolder = false;
+
+                if (Directory.Exists(TextBox_Input.Text))
+                {
+                    IsInputFolder = true;
+                }
+
+                if (Directory.Exists(TextBox_Output.Text))
+                {
+                    IsOutputFolder = true;
+                }
+
+                if (!IsOutputFolder)
+                {
+                    if (!string.IsNullOrEmpty(TextBox_Output.Text) && !TextBox_Output.Text.EndsWith(".dds", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        IsOutputFolder = true;
+
+                        if (!Directory.Exists(TextBox_Output.Text))
+                        {
+                            Directory.CreateDirectory(TextBox_Output.Text);
+                        }
+                    }
+                }
+
+                if (IsInputFolder && !IsOutputFolder)
+                {
+                    MessageBox.Show("When an input folder is specified, you must specify an output folder instead of a file.", "Error");
+                }
+
+                if (IsInputFolder)
+                {
+                    BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!);
+                }
+                else
+                {
+                    ConvertImage(TextBox_Input.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, TextBox_Output.Text, IsOutputFolder);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Error");
+            }
+        }
+
+        public void BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap)
+        {
+            foreach (var file in Directory.EnumerateFiles(inputFolder, "*.dds"))
+            {
+                ConvertImage(file, saveRawDDS, separateGlossMap, outputFolder, true);
+            }
+        }
+
+        public void ConvertImage(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath = "", bool isOutputFolder = false)
+        {
+            bool isNormalMap = false;
+
+            (ScratchImage? image, ScratchImage? alpha) dds = LoadGameDDS(filePath, saveRawDDS, outputPath, isOutputFolder);
+
+            if (dds.image != null)
+            {
+                var format = dds.image.GetImage(0).Format;
+
+                if (format == DXGI_FORMAT.BC5_SNORM || format == DXGI_FORMAT.BC5_UNORM)
+                {
+                    isNormalMap = true;
+                }
+            }
+
+            ScratchImage decompressedImage = dds.image!.Decompress(0, DXGI_FORMAT.R32G32B32A32_FLOAT);
+
+            if (isNormalMap)
+            {
+                byte[] reconstructed = ReconstructZ(GetPixelData(decompressedImage), true);
+
+                Marshal.Copy(reconstructed, 0, decompressedImage.GetImage(0).Pixels, reconstructed.Length);
+            }
+
+            if (dds.alpha != null)
+            {
+                if (separateGlossMap)
+                {
+                    ScratchImage decompressedAlpha = dds.alpha.Decompress(0, DXGI_FORMAT.R8_UNORM);
+
+                    if (isOutputFolder)
+                    {
+                        string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(filePath)! : outputPath;
+
+                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + "_alpha.tif"));
+                    }
+                    else
+                    {
+                        if (string.IsNullOrEmpty(outputPath))
+                        {
+                            throw new Exception("Incorrect output path.");
+                        }
+
+                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetFileNameWithoutExtension(outputPath) + "_alpha.tif"));
+                    }
+                }
+                else
+                {
+                    ScratchImage decompressedAlpha = dds.alpha.Decompress(0, DXGI_FORMAT.R32_FLOAT);
+
+                    byte[] merged = MergeAlpha(GetPixelData(decompressedImage), GetPixelData(decompressedAlpha));
+
+                    Marshal.Copy(merged, 0, decompressedImage.GetImage(0).Pixels, merged.Length);
+                }
+            }
+
+            if (isOutputFolder)
+            {
+                string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(filePath)! : outputPath;
+
+                decompressedImage.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + ".tif"));
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(outputPath))
+                {
+                    throw new Exception("Incorrect output path.");
+                }
+
+                decompressedImage.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), outputPath);
+            }
+        }
+
+        public (ScratchImage?, ScratchImage?) LoadGameDDS(string ddsFilePath, bool saveRawDDS = false, string outputPath = "", bool isOutputFolder = false)
+        {
+            ScratchImage? image = null;
+            ScratchImage? alpha = null;
+
+            List<byte[]> mips = new();
+            List<byte[]> alphaMips = new();
+
+            for (int i = 1; i < 64; i++)
+            {
+                string path = ddsFilePath + "." + i;
+
+                if (!File.Exists(path))
+                {
+                    break;
+                }
+
+                mips.Insert(0, File.ReadAllBytes(path));
+            }
+
+            for (int i = 1; i < 64; i++)
+            {
+                string path = ddsFilePath + "." + i + "a";
+
+                if (!File.Exists(path))
+                {
+                    break;
+                }
+
+                alphaMips.Insert(0, File.ReadAllBytes(path));
+            }
+
+            DDSFile ddsFile = new(ddsFilePath, false);
+            DDSFile? alphaDDSFile = null;
+
+            if (File.Exists(ddsFilePath + ".a"))
+            {
+                alphaDDSFile = new(ddsFilePath + ".a", true);
+            }
+
+            using (MemoryStream ms = new())
+            {
+                using (BinaryWriter bw = new(ms))
+                {
+                    foreach (var data in mips)
+                    {
+                        bw.Write(data);
+                    }
+
+                    bw.Write(ddsFile.Data!);
+                }
+
+                ddsFile.Data = ms.ToArray();
+
+                if (ddsFile.Data.Length != ComputePixelDataSize(ddsFile.Header.GetPixelFormat(), ddsFile.Header.Width, ddsFile.Header.Height, ddsFile.Header.MipMapCount))
+                {
+                    throw new Exception("Failed to load all necessary MIPs.");
+                }
+
+                if (saveRawDDS)
+                {
+                    if (isOutputFolder)
+                    {
+                        string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(ddsFilePath)! : outputPath;
+                        string path = Path.Combine(dir, Path.GetFileNameWithoutExtension(ddsFilePath) + ".dds");
+
+                        if (!File.Exists(path))
+                        {
+                            ddsFile.Write(path);
+                        }
+                    }
+                    else
+                    {
+                        if (string.IsNullOrEmpty(outputPath))
+                        {
+                            throw new Exception("Incorrect output path.");
+                        }
+
+                        ddsFile.Write(outputPath);
+                    }
+                }
+            }
+
+            if (alphaDDSFile != null)
+            {
+                using (MemoryStream ms = new())
+                {
+                    using (BinaryWriter bw = new(ms))
+                    {
+                        foreach (var data in alphaMips)
+                        {
+                            bw.Write(data);
+                        }
+
+                        bw.Write(alphaDDSFile.Data!);
+                    }
+
+                    alphaDDSFile.Data = ms.ToArray();
+
+                    if (alphaDDSFile.Data.Length != ComputePixelDataSize(alphaDDSFile.Header.GetPixelFormat(), alphaDDSFile.Header.Width, alphaDDSFile.Header.Height, alphaDDSFile.Header.MipMapCount))
+                    {
+                        throw new Exception("Failed to load all necessary alpha channel MIPs.");
+                    }
+
+                    if (saveRawDDS)
+                    {
+                        if (isOutputFolder)
+                        {
+                            string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(ddsFilePath)! : outputPath;
+                            string path = Path.Combine(dir, Path.GetFileNameWithoutExtension(ddsFilePath) + "_alpha.dds");
+
+                            if (!File.Exists(path))
+                            {
+                                alphaDDSFile.Write(path);
+                            }
+                        }
+                        else
+                        {
+                            if (string.IsNullOrEmpty(outputPath))
+                            {
+                                throw new Exception("Incorrect output path.");
+                            }
+
+                            string path = Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetFileNameWithoutExtension(outputPath) + "_alpha.dds");
+
+                            alphaDDSFile.Write(path);
+                        }
+                    }
+                }
+
+                byte[] alphaData = alphaDDSFile.Write();
+
+                GCHandle alphaHandle = GCHandle.Alloc(alphaData, GCHandleType.Pinned);
+
+                try
+                {
+                    IntPtr alphaPtr = alphaHandle.AddrOfPinnedObject();
+
+                    alpha = TexHelper.Instance.LoadFromDDSMemory(alphaPtr, alphaData.Length, DDS_FLAGS.ALLOW_LARGE_FILES);
+                }
+                finally
+                {
+                    alphaHandle.Free();
+                }
+            }
+
+            byte[] imageData = ddsFile.Write();
+
+            GCHandle imageHandle = GCHandle.Alloc(imageData, GCHandleType.Pinned);
+
+            try
+            {
+                IntPtr imagePtr = imageHandle.AddrOfPinnedObject();
+
+                image = TexHelper.Instance.LoadFromDDSMemory(imagePtr, imageData.Length, DDS_FLAGS.ALLOW_LARGE_FILES);
+            }
+            finally
+            {
+                imageHandle.Free();
+            }
+
+            return (image, alpha);
+        }
+
+        public byte[] GetPixelData(ScratchImage image)
+        {
+            int size = (int)image.GetPixelsSize();
+            byte[] data = new byte[size];
+            Marshal.Copy(image.GetPixels(), data, 0, size);
+
+            return data;
+        }
+
+        public MemoryStream GetPixelsStream(ScratchImage image)
+        {
+            return new MemoryStream(GetPixelData(image));
+        }
+
+        private int ComputePixelDataSize(DXGI_FORMAT format, int width, int height, int mipMapCount)
+        {
+            int bits = TexHelper.Instance.BitsPerPixel(format);
+
+            int baseSize = (width * height * bits);
+            int totalSize = baseSize;
+
+            for (int i = 1; i < mipMapCount; i++)
+            {
+                baseSize /= 4;
+                totalSize += baseSize;
+            }
+
+            return totalSize /= 8;
+        }
+
+        public byte[] ReconstructZ(byte[] pixelData, bool pack)
+        {
+            var vectors = new List<Vector2>();
+            var alphas = new List<float>();
+
+            using (MemoryStream ms = new(pixelData))
+            {
+                using (BinaryReader br = new(ms))
+                {
+                    while (br.BaseStream.Position != br.BaseStream.Length)
+                    {
+                        vectors.Add(new(br.ReadSingle(), br.ReadSingle()));
+                        br.BaseStream.Position += 4;
+                        alphas.Add(br.ReadSingle());
+                    }
+                }
+            }
+
+            using (MemoryStream ms = new(pixelData))
+            {
+                using (BinaryWriter bw = new(ms))
+                {
+                    for (int i = 0; i < vectors.Count; i++)
+                    {
+                        Vector2 vector = vectors[i];
+
+                        float z = MathF.Sqrt(1.0f - Vector2.Dot(vector, vector));
+
+                        bw.Write(pack ? MathF.Pow((vector.Y + 1.0f) / 2.0f, 2.2f) : vector.Y);
+                        bw.Write(pack ? MathF.Pow((vector.X + 1.0f) / 2.0f, 2.2f) : vector.X);
+                        bw.Write(pack ? MathF.Pow((z + 1.0f) / 2.0f, 2.2f) : z);
+                        bw.Write(1.0f);
+                    }
+                }
+
+                return ms.ToArray();
+            }
+        }
+
+        public byte[] MergeAlpha(byte[] pixelData, byte[] alphaPixelData)
+        {
+            var vectors = new List<Vector4>();
+            var alphas = new List<float>();
+
+            using (MemoryStream ms = new(pixelData))
+            {
+                using (BinaryReader br = new(ms))
+                {
+                    while (br.BaseStream.Position != br.BaseStream.Length)
+                    {
+                        vectors.Add(new(br.ReadSingle(), br.ReadSingle(), br.ReadSingle(), br.ReadSingle()));
+                    }
+                }
+            }
+
+            using (MemoryStream ms = new(alphaPixelData))
+            {
+                using (BinaryReader br = new(ms))
+                {
+                    while (br.BaseStream.Position != br.BaseStream.Length)
+                    {
+                        alphas.Add(br.ReadSingle());
+                    }
+                }
+            }
+
+            using (MemoryStream ms = new(pixelData))
+            {
+                using (BinaryWriter bw = new(ms))
+                {
+                    for (int i = 0; i < vectors.Count; i++)
+                    {
+                        bw.Write(vectors[i].X);
+                        bw.Write(vectors[i].Y);
+                        bw.Write(vectors[i].Z);
+                        bw.Write(alphas[i]);
+                    }
+                }
+
+                return ms.ToArray();
+            }
+        }
+
+        private void Button_InputPicker_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFolderDialog dialog = new OpenFolderDialog();
+            dialog.Multiselect = false;
+            dialog.Title = "Input folder";
+
+            if ((bool)dialog.ShowDialog()!)
+            {
+                TextBox_Input.Text = dialog.FolderName;
+            }
+        }
+
+        private void Button_OutputPicker_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFolderDialog dialog = new OpenFolderDialog();
+            dialog.Multiselect = false;
+            dialog.Title = "Output folder";
+
+            if ((bool)dialog.ShowDialog()!)
+            {
+                TextBox_Output.Text = dialog.FolderName;
+            }
+        }
+
+        private void TextBox_Drop(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+
+                if (files.Length > 0)
+                {
+                    TextBox? textBox = sender as TextBox;
+
+                    textBox!.Text = files[0];
+                }
+            }
+        }
+
+        private void TextBox_PreviewDragOver(object sender, DragEventArgs e) => e.Handled = true;
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e) => WriteSettingsFile();
+
+        //Disgustang xml reader/writer
+
+        public void ReadSettingsFile()
+        {
+            if (!File.Exists("Settings.xml"))
+            {
+                WriteSettingsFile();
+
+                return;
+            }
+
+            XmlReaderSettings settings = new();
+
+            try
+            {
+                using (XmlReader reader = XmlReader.Create("Settings.xml", settings))
+                {
+
+                    while (reader.Read())
+                    {
+                        switch (reader.NodeType)
+                        {
+                            case XmlNodeType.Element:
+                                switch (reader.Name.ToLower())
+                                {
+                                    case "settings":
+                                        while (reader.Read())
+                                        {
+                                            if (reader.NodeType == XmlNodeType.Element)
+                                            {
+                                                switch (reader.Name.ToLower())
+                                                {
+                                                    case "value":
+                                                        ReadPropertyFromXml(reader);
+                                                        break;
+                                                }
+                                            }
+                                            else if (reader.NodeType == XmlNodeType.EndElement)
+                                            {
+                                                if (reader.Name.ToLower() == "settings")
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        break;
+                                }
+                                break;
+                        }
+                    }
+                }
+
+                if (!((bool)CheckBox_RememberPaths.IsChecked!))
+                {
+                    TextBox_Input.Text = "";
+                    TextBox_Output.Text = "";
+                }
+            }
+            catch (Exception ex)
+            {
+               MessageBox.Show(ex.Message, "Error reading settings file!");
+
+                if (File.Exists("Settings.xml"))
+                {
+                    File.Delete("Settings.xml");
+                }
+
+                WriteSettingsFile();
+
+                return;
+            }
+        }
+
+        public void WriteSettingsFile()
+        {
+            XElement MainElement = new("Settings", new XAttribute("Date", DateTime.Now.ToString("G")));
+
+            XElement Element = new("Value", new XAttribute("Name", "SeparateGlossMap"), new XAttribute("Type", typeof(bool).Name));
+            Element.Value = ((bool)CheckBox_SeparateGlossMap.IsChecked!).ToString();
+
+            MainElement.Add(Element);
+
+            Element = new("Value", new XAttribute("Name", "SaveRawDDS"), new XAttribute("Type", typeof(bool).Name));
+            Element.Value = ((bool)CheckBox_SaveRawDDS.IsChecked!).ToString();
+
+            MainElement.Add(Element);
+
+            Element = new("Value", new XAttribute("Name", "RememberPaths"), new XAttribute("Type", typeof(bool).Name));
+            Element.Value = ((bool)CheckBox_RememberPaths.IsChecked!).ToString();
+
+            MainElement.Add(Element);
+
+            Element = new("Value", new XAttribute("Name", "InputPath"), new XAttribute("Type", typeof(string).Name));
+            Element.Value = TextBox_Input.Text;
+
+            MainElement.Add(Element);
+
+            Element = new("Value", new XAttribute("Name", "OutputPath"), new XAttribute("Type", typeof(string).Name));
+            Element.Value = TextBox_Output.Text;
+
+            MainElement.Add(Element);
+
+            XmlWriterSettings settings = new();
+            settings.Indent = true;
+            settings.IndentChars = "    ";
+            settings.Encoding = Encoding.Unicode;
+
+            using (XmlWriter writer = XmlWriter.Create("Settings.xml", settings))
+            {
+                MainElement.Save(writer);
+            }
+        }
+
+        private void ReadPropertyFromXml(XmlReader reader)
+        {
+            string name = reader.GetAttribute("Name")!;
+            string type = reader.GetAttribute("Type")!;
+            reader.Read();
+
+            switch (type.ToLower())
+            {
+                case "string":
+                    switch (name)
+                    {
+                        case "InputPath":
+                            TextBox_Input.Text = reader.Value;
+                            break;
+
+                        case "OutputPath":
+                            TextBox_Output.Text = reader.Value;
+                            break;
+                    }
+                    break;
+
+                case "boolean":
+                    switch (name)
+                    {
+                        case "SeparateGlossMap":
+                            CheckBox_SeparateGlossMap.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
+                            break;
+
+                        case "SaveRawDDS":
+                            CheckBox_SaveRawDDS.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
+                            break;
+
+                        case "RememberPaths":
+                            CheckBox_RememberPaths.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
+                            break;
+                    }
+                    break;
+            }
+        }
+    }
+}
