@@ -6,10 +6,12 @@
         xmlns:local="clr-namespace:KCDTextureExporter"
         mc:Ignorable="d"
         ResizeMode="CanMinimize"
-        Title="KCD Texture Exporter" Height="184" Width="516"
+        Title="KCD Texture Exporter" Height="219" Width="516"
         Closing="Window_Closing">
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="30"/>
             <RowDefinition Height="5"/>
             <RowDefinition Height="30"/>
             <RowDefinition Height="5"/>
@@ -33,6 +35,15 @@
         </Grid>
         <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <CheckBox Grid.Column="0" Name="CheckBox_DeleteSourceFiles" Content="Delete source files" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="5,0,0,0" ToolTip="Deletes the source DDS and individual MIP files."/>
+            <CheckBox Grid.Column="1" Name="CheckBox_Recursive" Content="Include sub-folders" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,0" ToolTip="Recursively convert files in all sub-folders."/>
+        </Grid>
+        <Grid Grid.Row="5">
+            <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="100"/>
                 <ColumnDefinition Width="360"/>
                 <ColumnDefinition Width="40"/>
@@ -41,7 +52,7 @@
             <TextBox Grid.Column="1" Grid.ColumnSpan="2" Name="TextBox_Input" ToolTip="Input DDS file or a folder containing DDS files." HorizontalAlignment="Left" VerticalAlignment="Center" Height="30" Width="360" FontSize="16" AllowDrop="True" PreviewDragOver="TextBox_PreviewDragOver" Drop="TextBox_Drop"/>
             <Button Grid.Column="2" Name="Button_Pick_Input" Content="..." Height="30" Width="30" FontSize="22" Foreground="#606060" Click="Button_InputPicker_Click"/>
         </Grid>
-        <Grid Grid.Row="5">
+        <Grid Grid.Row="7">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="100"/>
                 <ColumnDefinition Width="360"/>
@@ -51,6 +62,6 @@
             <TextBox Grid.Column="1" Grid.ColumnSpan="2" Name="TextBox_Output" ToolTip="Output DDS file or a folder for outputting processed files." HorizontalAlignment="Left" VerticalAlignment="Center" Height="30" Width="360" FontSize="16" AllowDrop="True" PreviewDragOver="TextBox_PreviewDragOver" Drop="TextBox_Drop"/>
             <Button Grid.Column="2" Name="Button_Pick_Output" Content="..." Height="30" Width="30" FontSize="22" Foreground="#606060" Click="Button_OutputPicker_Click"/>
         </Grid>
-        <Button Grid.Row="7" Width="90" Content="Convert" FontSize="18" VerticalContentAlignment="Center" Padding="0" Click="Button_Convert_Click"/>
+        <Button Grid.Row="9" Width="90" Content="Convert" FontSize="18" VerticalContentAlignment="Center" Padding="0" Click="Button_Convert_Click"/>
     </Grid>
 </Window>

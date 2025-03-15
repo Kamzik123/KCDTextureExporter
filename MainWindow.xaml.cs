@@ -57,6 +57,11 @@ namespace KCDTextureExporter
                     }
                 }
 
+                if (string.IsNullOrEmpty(TextBox_Output.Text))
+                {
+                    IsOutputFolder = true;
+                }
+
                 if (IsInputFolder && !IsOutputFolder)
                 {
                     MessageBox.Show("When an input folder is specified, you must specify an output folder instead of a file.", "Error");
@@ -64,12 +69,14 @@ namespace KCDTextureExporter
 
                 if (IsInputFolder)
                 {
-                    BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!);
+                    BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, (bool)CheckBox_DeleteSourceFiles.IsChecked!, (bool)CheckBox_Recursive.IsChecked!);
                 }
                 else
                 {
-                    ConvertImage(TextBox_Input.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, TextBox_Output.Text, IsOutputFolder);
+                    ConvertImage(TextBox_Input.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, TextBox_Output.Text, (bool)CheckBox_DeleteSourceFiles.IsChecked!, IsOutputFolder);
                 }
+
+                GC.Collect();
             }
             catch (Exception ex)
             {
@@ -77,19 +84,51 @@ namespace KCDTextureExporter
             }
         }
 
-        public void BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap)
+        public void BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap, bool deleteSourceFiles, bool recursive)
         {
             foreach (var file in Directory.EnumerateFiles(inputFolder, "*.dds"))
             {
-                ConvertImage(file, saveRawDDS, separateGlossMap, outputFolder, true);
+                try
+                {
+                    Task.Run(() =>
+                    {
+                        ConvertImage(file, saveRawDDS, separateGlossMap, outputFolder, deleteSourceFiles, true);
+                        GC.Collect();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Failed to convert {Path.GetFileName(file)}, it will be skipped.\nError: {ex.Message}", "Error");
+                    continue;
+                }
+            }
+
+            if (recursive)
+            {
+                foreach (var dir in Directory.EnumerateDirectories(inputFolder))
+                {
+                    string newOutputPath = "";
+
+                    if (!string.IsNullOrEmpty(outputFolder))
+                    {
+                        newOutputPath = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(dir)!);
+
+                        if (!Directory.Exists(newOutputPath))
+                        {
+                            Directory.CreateDirectory(newOutputPath);
+                        }
+                    }
+
+                    BatchProcessFiles(dir, newOutputPath, saveRawDDS, separateGlossMap, deleteSourceFiles, recursive);
+                }
             }
         }
 
-        public void ConvertImage(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath = "", bool isOutputFolder = false)
+        public void ConvertImage(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath = "", bool deleteSourceFiles = false, bool isOutputFolder = false)
         {
             bool isNormalMap = false;
 
-            (ScratchImage? image, ScratchImage? alpha) dds = LoadGameDDS(filePath, saveRawDDS, outputPath, isOutputFolder);
+            (ScratchImage? image, ScratchImage? alpha, List<string> mipFiles, List<string> alphaMipFiles) dds = LoadGameDDS(filePath, saveRawDDS, deleteSourceFiles, outputPath, isOutputFolder);
 
             if (dds.image != null)
             {
@@ -131,6 +170,8 @@ namespace KCDTextureExporter
 
                         decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetFileNameWithoutExtension(outputPath) + "_alpha.tif"));
                     }
+
+                    decompressedAlpha.Dispose();
                 }
                 else
                 {
@@ -139,7 +180,11 @@ namespace KCDTextureExporter
                     byte[] merged = MergeAlpha(GetPixelData(decompressedImage), GetPixelData(decompressedAlpha));
 
                     Marshal.Copy(merged, 0, decompressedImage.GetImage(0).Pixels, merged.Length);
+
+                    decompressedAlpha.Dispose();
                 }
+
+                dds.alpha.Dispose();
             }
 
             if (isOutputFolder)
@@ -157,12 +202,49 @@ namespace KCDTextureExporter
 
                 decompressedImage.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), outputPath);
             }
+
+            dds.image.Dispose();
+            decompressedImage.Dispose();
+
+            if (deleteSourceFiles)
+            {
+                foreach (var file in dds.mipFiles)
+                {
+                    if (File.Exists(file))
+                    {
+                        File.Delete(file);
+                    }
+                }
+
+                foreach (var file in dds.alphaMipFiles)
+                {
+                    if (File.Exists(file))
+                    {
+                        File.Delete(file);
+                    }
+                }
+
+                if (!(saveRawDDS && isOutputFolder && string.IsNullOrEmpty(outputPath)))
+                {
+                    if (File.Exists(filePath))
+                    {
+                        File.Delete(filePath);
+                    }
+
+                    if (File.Exists(filePath + ".a"))
+                    {
+                        File.Delete(filePath + ".a");
+                    }
+                }
+            }
         }
 
-        public (ScratchImage?, ScratchImage?) LoadGameDDS(string ddsFilePath, bool saveRawDDS = false, string outputPath = "", bool isOutputFolder = false)
+        public (ScratchImage?, ScratchImage?, List<string>, List<string>) LoadGameDDS(string ddsFilePath, bool saveRawDDS = false, bool deleteSourceFiles = false, string outputPath = "", bool isOutputFolder = false)
         {
             ScratchImage? image = null;
             ScratchImage? alpha = null;
+            List<string> mipFiles = new();
+            List<string> alphaMipFiles = new();
 
             List<byte[]> mips = new();
             List<byte[]> alphaMips = new();
@@ -177,6 +259,7 @@ namespace KCDTextureExporter
                 }
 
                 mips.Insert(0, File.ReadAllBytes(path));
+                mipFiles.Add(path);
             }
 
             for (int i = 1; i < 64; i++)
@@ -189,6 +272,7 @@ namespace KCDTextureExporter
                 }
 
                 alphaMips.Insert(0, File.ReadAllBytes(path));
+                alphaMipFiles.Add(path);
             }
 
             DDSFile ddsFile = new(ddsFilePath, false);
@@ -225,7 +309,7 @@ namespace KCDTextureExporter
                         string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(ddsFilePath)! : outputPath;
                         string path = Path.Combine(dir, Path.GetFileNameWithoutExtension(ddsFilePath) + ".dds");
 
-                        if (!File.Exists(path))
+                        if (!File.Exists(path) || deleteSourceFiles)
                         {
                             ddsFile.Write(path);
                         }
@@ -270,7 +354,7 @@ namespace KCDTextureExporter
                             string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(ddsFilePath)! : outputPath;
                             string path = Path.Combine(dir, Path.GetFileNameWithoutExtension(ddsFilePath) + "_alpha.dds");
 
-                            if (!File.Exists(path))
+                            if (!File.Exists(path) || deleteSourceFiles)
                             {
                                 alphaDDSFile.Write(path);
                             }
@@ -320,7 +404,7 @@ namespace KCDTextureExporter
                 imageHandle.Free();
             }
 
-            return (image, alpha);
+            return (image, alpha, mipFiles, alphaMipFiles);
         }
 
         public byte[] GetPixelData(ScratchImage image)
@@ -572,6 +656,16 @@ namespace KCDTextureExporter
 
             MainElement.Add(Element);
 
+            Element = new("Value", new XAttribute("Name", "DeleteSourceFiles"), new XAttribute("Type", typeof(bool).Name));
+            Element.Value = ((bool)CheckBox_DeleteSourceFiles.IsChecked!).ToString();
+
+            MainElement.Add(Element);
+
+            Element = new("Value", new XAttribute("Name", "Recursive"), new XAttribute("Type", typeof(bool).Name));
+            Element.Value = ((bool)CheckBox_Recursive.IsChecked!).ToString();
+
+            MainElement.Add(Element);
+
             Element = new("Value", new XAttribute("Name", "InputPath"), new XAttribute("Type", typeof(string).Name));
             Element.Value = TextBox_Input.Text;
 
@@ -627,6 +721,14 @@ namespace KCDTextureExporter
 
                         case "RememberPaths":
                             CheckBox_RememberPaths.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
+                            break;
+
+                        case "DeleteSourceFiles":
+                            CheckBox_DeleteSourceFiles.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
+                            break;
+
+                        case "Recursive":
+                            CheckBox_Recursive.IsChecked = XmlConvert.ToBoolean(reader.Value.ToLower());
                             break;
                     }
                     break;
