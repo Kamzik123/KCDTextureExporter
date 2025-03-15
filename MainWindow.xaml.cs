@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Xml.Linq;
 using System.Xml;
+using System.Windows.Interop;
 
 namespace KCDTextureExporter
 {
@@ -18,6 +19,23 @@ namespace KCDTextureExporter
     /// </summary>
     public partial class MainWindow : Window
     {
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FLASHWINFO
+        {
+            public uint cbSize;
+            public IntPtr hwnd;
+            public uint dwFlags;
+            public uint uCount;
+            public uint dwTimeout;
+        }
+
+        private const uint FLASHW_ALL = 0x3;
+        private const uint FLASHW_TIMERNOFG = 0xC;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -69,7 +87,22 @@ namespace KCDTextureExporter
 
                 if (IsInputFolder)
                 {
-                    BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, (bool)CheckBox_DeleteSourceFiles.IsChecked!, (bool)CheckBox_Recursive.IsChecked!);
+                    Button_Convert.IsEnabled = false;
+
+                    List<Task> tasks = BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, (bool)CheckBox_DeleteSourceFiles.IsChecked!, (bool)CheckBox_Recursive.IsChecked!);
+
+                    Task.WhenAll(tasks).ContinueWith(tasks =>
+                    {
+                        Button_Convert.Dispatcher.Invoke(() =>
+                        {
+                            Button_Convert.IsEnabled = true;
+                        });
+
+                        this.Dispatcher.Invoke(() =>
+                        {
+                            FlashWindow();
+                        });
+                    });
                 }
                 else
                 {
@@ -84,17 +117,19 @@ namespace KCDTextureExporter
             }
         }
 
-        public void BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap, bool deleteSourceFiles, bool recursive)
+        public List<Task> BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap, bool deleteSourceFiles, bool recursive)
         {
+            List<Task> tasks = new();
+
             foreach (var file in Directory.EnumerateFiles(inputFolder, "*.dds"))
             {
                 try
                 {
-                    Task.Run(() =>
+                    tasks.Add(Task.Run(() =>
                     {
                         ConvertImage(file, saveRawDDS, separateGlossMap, outputFolder, deleteSourceFiles, true);
                         GC.Collect();
-                    });
+                    }));
                 }
                 catch (Exception ex)
                 {
@@ -119,9 +154,11 @@ namespace KCDTextureExporter
                         }
                     }
 
-                    BatchProcessFiles(dir, newOutputPath, saveRawDDS, separateGlossMap, deleteSourceFiles, recursive);
+                    tasks.AddRange(BatchProcessFiles(dir, newOutputPath, saveRawDDS, separateGlossMap, deleteSourceFiles, recursive));
                 }
             }
+
+            return tasks;
         }
 
         public void ConvertImage(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath = "", bool deleteSourceFiles = false, bool isOutputFolder = false)
@@ -562,6 +599,22 @@ namespace KCDTextureExporter
         private void TextBox_PreviewDragOver(object sender, DragEventArgs e) => e.Handled = true;
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e) => WriteSettingsFile();
+
+        private void FlashWindow()
+        {
+            WindowInteropHelper wih = new(this);
+
+            FLASHWINFO fwi = new FLASHWINFO
+            {
+                hwnd = wih.Handle,
+                dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
+                uCount = uint.MaxValue,
+                dwTimeout = 0
+            };
+
+            fwi.cbSize = Convert.ToUInt32(Marshal.SizeOf(fwi));
+            FlashWindowEx(ref fwi);
+        }
 
         //Disgustang xml reader/writer
 
