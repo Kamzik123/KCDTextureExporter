@@ -164,6 +164,7 @@ namespace KCDTextureExporter
         public void ConvertImage(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath = "", bool deleteSourceFiles = false, bool isOutputFolder = false)
         {
             bool isNormalMap = false;
+            bool isSRGB = false;
 
             (ScratchImage? image, ScratchImage? alpha, List<string> mipFiles, List<string> alphaMipFiles) dds = LoadGameDDS(filePath, saveRawDDS, deleteSourceFiles, outputPath, isOutputFolder);
 
@@ -175,6 +176,8 @@ namespace KCDTextureExporter
                 {
                     isNormalMap = true;
                 }
+
+                isSRGB = TexHelper.Instance.IsSRGB(format);
             }
 
             ScratchImage decompressedImage = dds.image!.Decompress(0, DXGI_FORMAT.R32G32B32A32_FLOAT);
@@ -184,6 +187,14 @@ namespace KCDTextureExporter
                 byte[] reconstructed = ReconstructZ(GetPixelData(decompressedImage), true);
 
                 Marshal.Copy(reconstructed, 0, decompressedImage.GetImage(0).Pixels, reconstructed.Length);
+            }
+            else if (isSRGB) // Extending color space tends to cause issues, so we clamp it to 8 bits
+            {
+                decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM_SRGB, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+            }
+            else
+            {
+                decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
             }
 
             if (dds.alpha != null)
