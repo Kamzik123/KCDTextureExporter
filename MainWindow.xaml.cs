@@ -168,19 +168,27 @@ namespace KCDTextureExporter
 
             (ScratchImage? image, ScratchImage? alpha, List<string> mipFiles, List<string> alphaMipFiles) dds = LoadGameDDS(filePath, saveRawDDS, deleteSourceFiles, outputPath, isOutputFolder);
 
-            if (dds.image != null)
+            if (dds.image == null)
             {
-                var format = dds.image.GetImage(0).Format;
-
-                if (format == DXGI_FORMAT.BC5_SNORM || format == DXGI_FORMAT.BC5_UNORM)
-                {
-                    isNormalMap = true;
-                }
-
-                isSRGB = TexHelper.Instance.IsSRGB(format);
+                throw new Exception("Failed to load DDS image.");
             }
 
-            ScratchImage decompressedImage = dds.image!.Decompress(0, DXGI_FORMAT.R32G32B32A32_FLOAT);
+            var format = dds.image.GetImage(0).Format;
+
+            isNormalMap = format == DXGI_FORMAT.BC5_SNORM || format == DXGI_FORMAT.BC5_UNORM;
+
+            isSRGB = TexHelper.Instance.IsSRGB(format);
+
+            ScratchImage decompressedImage = dds.image;
+
+            if (TexHelper.Instance.IsCompressed(format))
+            {
+                decompressedImage = dds.image.Decompress(0, DXGI_FORMAT.R32G32B32A32_FLOAT);
+            }
+            else if (format != DXGI_FORMAT.R32G32B32A32_FLOAT)
+            {
+                decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R32G32B32A32_FLOAT, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+            }
 
             if (isNormalMap)
             {
@@ -188,20 +196,21 @@ namespace KCDTextureExporter
 
                 Marshal.Copy(reconstructed, 0, decompressedImage.GetImage(0).Pixels, reconstructed.Length);
             }
-            else if (isSRGB) // Extending color space tends to cause issues, so we clamp it to 8 bits
-            {
-                decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM_SRGB, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
-            }
-            else
-            {
-                decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
-            }
 
             if (dds.alpha != null)
             {
                 if (separateGlossMap)
                 {
-                    ScratchImage decompressedAlpha = dds.alpha.Decompress(0, DXGI_FORMAT.R8_UNORM);
+                    ScratchImage decompressedAlpha = dds.alpha!;
+
+                    if (TexHelper.Instance.IsCompressed(dds.alpha!.GetImage(0, 0, 0).Format))
+                    {
+                        decompressedAlpha = dds.alpha.Decompress(0, DXGI_FORMAT.R8_UNORM);
+                    }
+                    else if (dds.alpha!.GetImage(0, 0, 0).Format != DXGI_FORMAT.R8_UNORM)
+                    {
+                        decompressedAlpha = dds.alpha.Convert(0, DXGI_FORMAT.R8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                    }
 
                     if (isOutputFolder)
                     {
@@ -223,7 +232,16 @@ namespace KCDTextureExporter
                 }
                 else
                 {
-                    ScratchImage decompressedAlpha = dds.alpha.Decompress(0, DXGI_FORMAT.R32_FLOAT);
+                    ScratchImage decompressedAlpha = dds.alpha!;
+
+                    if (TexHelper.Instance.IsCompressed(dds.alpha!.GetImage(0, 0, 0).Format))
+                    {
+                        decompressedAlpha = decompressedAlpha.Decompress(0, DXGI_FORMAT.R32_FLOAT);
+                    }
+                    else if (dds.alpha!.GetImage(0, 0, 0).Format != DXGI_FORMAT.R32_FLOAT)
+                    {
+                        decompressedAlpha = decompressedAlpha.Convert(0, DXGI_FORMAT.R32_FLOAT, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                    }
 
                     byte[] merged = MergeAlpha(GetPixelData(decompressedImage), GetPixelData(decompressedAlpha));
 
@@ -233,6 +251,18 @@ namespace KCDTextureExporter
                 }
 
                 dds.alpha.Dispose();
+            }
+
+            if (!isNormalMap)
+            {
+                if (isSRGB) // Extending color space tends to cause issues, so we clamp it to 8 bits
+                {
+                    decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM_SRGB, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                }
+                else
+                {
+                    decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                }
             }
 
             if (isOutputFolder)
