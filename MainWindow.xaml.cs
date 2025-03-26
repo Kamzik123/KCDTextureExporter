@@ -165,6 +165,7 @@ namespace KCDTextureExporter
         {
             bool isNormalMap = false;
             bool isSRGB = false;
+            bool isIDMap = Path.GetFileNameWithoutExtension(filePath).EndsWith("_id");
 
             (ScratchImage? image, ScratchImage? alpha, List<string> mipFiles, List<string> alphaMipFiles) dds = LoadGameDDS(filePath, saveRawDDS, deleteSourceFiles, outputPath, isOutputFolder);
 
@@ -253,15 +254,19 @@ namespace KCDTextureExporter
                 dds.alpha.Dispose();
             }
 
-            if (!isNormalMap)
+            if (!isNormalMap) // Extending color space tends to cause issues, so we clamp it to 8 bits
             {
-                if (isSRGB) // Extending color space tends to cause issues, so we clamp it to 8 bits
+                if (isIDMap)
                 {
-                    decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM_SRGB, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                    byte[] quantizedData = QuantizeIDPixels(GetPixelData(decompressedImage));
+
+                    decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.0f);
+
+                    Marshal.Copy(quantizedData, 0, decompressedImage.GetImage(0).Pixels, quantizedData.Length);
                 }
                 else
                 {
-                    decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
+                    decompressedImage = decompressedImage.Convert(isSRGB ? DXGI_FORMAT.R8G8B8A8_UNORM_SRGB : DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
                 }
             }
 
@@ -312,6 +317,28 @@ namespace KCDTextureExporter
                     if (File.Exists(filePath + ".a"))
                     {
                         File.Delete(filePath + ".a");
+                    }
+                }
+            }
+        }
+
+        public byte[] QuantizeIDPixels(byte[] decompressedPixels)
+        {
+            using (MemoryStream ms = new(decompressedPixels))
+            {
+                using (BinaryReader br = new(ms))
+                {
+                    using (MemoryStream ws = new())
+                    {
+                        using (BinaryWriter bw = new(ws))
+                        {
+                            while (br.BaseStream.Position != br.BaseStream.Length)
+                            {
+                                bw.Write((byte)MathF.Floor(br.ReadSingle() * 255.0f)); // ID map complains when we use rounding instead of flooring
+                            }
+                        }
+
+                        return ws.ToArray();
                     }
                 }
             }
