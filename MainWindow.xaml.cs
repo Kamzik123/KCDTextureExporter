@@ -217,7 +217,7 @@ namespace KCDTextureExporter
                     {
                         string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(filePath)! : outputPath;
 
-                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + "_alpha.tif"));
+                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.NONE, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + "_alpha.tif"));
                     }
                     else
                     {
@@ -226,7 +226,7 @@ namespace KCDTextureExporter
                             throw new Exception("Incorrect output path.");
                         }
 
-                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetFileNameWithoutExtension(outputPath) + "_alpha.tif"));
+                        decompressedAlpha.SaveToWICFile(0, WIC_FLAGS.NONE, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetFileNameWithoutExtension(outputPath) + "_alpha.tif"));
                     }
 
                     decompressedAlpha.Dispose();
@@ -258,7 +258,7 @@ namespace KCDTextureExporter
             {
                 if (isIDMap)
                 {
-                    byte[] quantizedData = QuantizeIDPixels(GetPixelData(decompressedImage));
+                    byte[] quantizedData = QuantizeIDPixels(GetPixelData(decompressedImage), isSRGB);
 
                     decompressedImage = decompressedImage.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.0f);
 
@@ -274,7 +274,7 @@ namespace KCDTextureExporter
             {
                 string dir = string.IsNullOrEmpty(outputPath) ? Path.GetDirectoryName(filePath)! : outputPath;
 
-                decompressedImage.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + ".tif"));
+                decompressedImage.SaveToWICFile(0, WIC_FLAGS.NONE, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), Path.Combine(dir, Path.GetFileNameWithoutExtension(filePath) + ".tif"));
             }
             else
             {
@@ -283,7 +283,7 @@ namespace KCDTextureExporter
                     throw new Exception("Incorrect output path.");
                 }
 
-                decompressedImage.SaveToWICFile(0, WIC_FLAGS.FORCE_SRGB, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), outputPath);
+                decompressedImage.SaveToWICFile(0, WIC_FLAGS.NONE, TexHelper.Instance.GetWICCodec(WICCodecs.TIFF), outputPath);
             }
 
             dds.image.Dispose();
@@ -322,7 +322,7 @@ namespace KCDTextureExporter
             }
         }
 
-        public byte[] QuantizeIDPixels(byte[] decompressedPixels)
+        public byte[] QuantizeIDPixels(byte[] decompressedPixels, bool isSRGB)
         {
             using (MemoryStream ms = new(decompressedPixels))
             {
@@ -334,7 +334,30 @@ namespace KCDTextureExporter
                         {
                             while (br.BaseStream.Position != br.BaseStream.Length)
                             {
-                                bw.Write((byte)MathF.Floor(br.ReadSingle() * 255.0f)); // ID map complains when we use rounding instead of flooring
+                                float r = br.ReadSingle();
+                                float g = br.ReadSingle();
+                                float b = br.ReadSingle();
+                                float a = br.ReadSingle();
+
+                                if (isSRGB)
+                                {
+                                    r = MathF.Pow(r, 1.0f / 2.2f);
+                                    g = MathF.Pow(g, 1.0f / 2.2f);
+                                    b = MathF.Pow(b, 1.0f / 2.2f);
+
+                                    bw.Write((byte)MathF.Ceiling(r * 255.0f));
+                                    bw.Write((byte)MathF.Ceiling(g * 255.0f));
+                                    bw.Write((byte)MathF.Ceiling(b * 255.0f));
+                                    bw.Write((byte)MathF.Floor(a * 255.0f));
+                                }
+                                else
+                                {
+                                    bw.Write((byte)MathF.Floor(r * 255.0f)); // ID map complains when we use rounding instead of flooring
+                                    bw.Write((byte)MathF.Floor(g * 255.0f));
+                                    bw.Write((byte)MathF.Floor(b * 255.0f));
+                                    bw.Write((byte)MathF.Floor(a * 255.0f));
+                                }
+                                
                             }
                         }
 
@@ -402,7 +425,7 @@ namespace KCDTextureExporter
 
                 ddsFile.Data = ms.ToArray();
 
-                if (ddsFile.Data.Length != ComputePixelDataSize(ddsFile.Header.GetPixelFormat(), ddsFile.Header.Width, ddsFile.Header.Height, ddsFile.Header.MipMapCount))
+                if (ddsFile.Data.Length < ComputePixelDataSize(ddsFile.Header.GetPixelFormat(), ddsFile.Header.Width, ddsFile.Header.Height, ddsFile.Header.MipMapCount))
                 {
                     throw new Exception("Failed to load all necessary MIPs.");
                 }
