@@ -87,6 +87,14 @@ namespace KCDTextureExporter
 
                 if (IsInputFolder)
                 {
+                    var ddsFiles = Directory.EnumerateFiles(TextBox_Input.Text, "*.dds", (bool)CheckBox_Recursive.IsChecked! ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+
+                    if (!ddsFiles.Any())
+                    {
+                        MessageBox.Show("No .dds files were found in the selected input folder.", "Error");
+                        return;
+                    }
+
                     Button_Convert.IsEnabled = false;
 
                     List<Task> tasks = BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, (bool)CheckBox_DeleteSourceFiles.IsChecked!, (bool)CheckBox_Recursive.IsChecked!);
