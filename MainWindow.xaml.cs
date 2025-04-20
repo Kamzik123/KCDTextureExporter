@@ -82,7 +82,7 @@ namespace KCDTextureExporter
 
                 if (IsInputFolder && !IsOutputFolder)
                 {
-                    MessageBox.Show("When an input folder is specified, you must specify an output folder instead of a file.", "Error");
+                    throw new Exception("When an input folder is specified, you must specify an output folder instead of a file.");
                 }
 
                 if (IsInputFolder)
@@ -91,8 +91,7 @@ namespace KCDTextureExporter
 
                     if (!ddsFiles.Any())
                     {
-                        MessageBox.Show("No .dds files were found in the selected input folder.", "Error");
-                        return;
+                        throw new Exception("No .dds files were found in the selected input folder.");
                     }
 
                     Button_Convert.IsEnabled = false;
