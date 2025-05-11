@@ -36,6 +36,11 @@ namespace KCDTextureExporter
         private const uint FLASHW_ALL = 0x3;
         private const uint FLASHW_TIMERNOFG = 0xC;
 
+        public static void ConvertImageStatic(string filePath, bool saveRawDDS, bool separateGlossMap, string outputPath, bool deleteSourceFiles, bool isOutputFolder)
+        {
+            new MainWindow().ConvertImage(filePath, saveRawDDS, separateGlossMap, outputPath, deleteSourceFiles, isOutputFolder);
+        }
+
         public MainWindow()
         {
             InitializeComponent();
