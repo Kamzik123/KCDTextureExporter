@@ -32,12 +32,12 @@ namespace KCDTextureExporter
 
                     foreach (var file in ddsFiles)
                     {
-                        KCDTextureExporter.MainWindow.ConvertImageStatic(file, saveRaw, separateGloss, outputPath, deleteSrc, true);
+                        ImageConverter.ConvertImage(file, saveRaw, separateGloss, outputPath, deleteSrc, true);
                     }
                 }
                 else
                 {
-                    KCDTextureExporter.MainWindow.ConvertImageStatic(inputPath, saveRaw, separateGloss, outputPath, deleteSrc, isOutputFolder);
+                    ImageConverter.ConvertImage(inputPath, saveRaw, separateGloss, outputPath, deleteSrc, isOutputFolder);
                 }
 
                 Shutdown();
