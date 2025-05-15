@@ -44,7 +44,7 @@ namespace KCDTextureExporter
             // 5) If normal map, reconstruct Z channel
             if (isNormal)
             {
-                var rec = ReconstructZ(GetPixelData(work), true);
+                byte[] rec = ReconstructZ(GetPixelData(work), true);
                 Marshal.Copy(rec, 0, work.GetImage(0).Pixels, rec.Length);
             }
 
@@ -78,19 +78,18 @@ namespace KCDTextureExporter
                     else if (aFmt != DXGI_FORMAT.R32_FLOAT)
                         aImg = aImg.Convert(0, DXGI_FORMAT.R32_FLOAT, TEX_FILTER_FLAGS.DEFAULT, 0.5f);
 
-                    var merged = MergeAlpha(GetPixelData(work), GetPixelData(aImg));
+                    byte[] merged = MergeAlpha(GetPixelData(work), GetPixelData(aImg));
                     Marshal.Copy(merged, 0, work.GetImage(0).Pixels, merged.Length);
                     aImg.Dispose();
                 }
                 alpha.Dispose();
             }
 
-            // 7) Final conversion into 8-bit color (or special ID-map quant)
             if (!isNormal)
             {
                 if (isIDMap)
                 {
-                    var q = QuantizeIDPixels(GetPixelData(work), isSRGB);
+                    byte[] q = QuantizeIDPixels(GetPixelData(work), isSRGB);
                     work = work.Convert(DXGI_FORMAT.R8G8B8A8_UNORM, TEX_FILTER_FLAGS.DEFAULT, 0.0f);
                     Marshal.Copy(q, 0, work.GetImage(0).Pixels, q.Length);
                 }
@@ -215,15 +214,14 @@ namespace KCDTextureExporter
                 finally { h.Free(); }
             }
 
-            // read final color image
             var imgData = ddsFile.Write();
             var h2 = GCHandle.Alloc(imgData, GCHandleType.Pinned);
             try
             {
                 image = TexHelper.Instance.LoadFromDDSMemory(
-                            h2.AddrOfPinnedObject(),
-                            imgData.Length,
-                            DDS_FLAGS.ALLOW_LARGE_FILES);
+                        h2.AddrOfPinnedObject(),
+                        imgData.Length,
+                        DDS_FLAGS.ALLOW_LARGE_FILES);
             }
             finally { h2.Free(); }
 
@@ -241,29 +239,31 @@ namespace KCDTextureExporter
         public static byte[] ReconstructZ(byte[] pixelData, bool pack)
         {
             var vectors = new List<Vector2>();
+            // read only when at least 12 bytes remain (8 for X/Y + skip Z+W)
             using (var ms = new MemoryStream(pixelData))
             using (var br = new BinaryReader(ms))
-            {
-                while (ms.Position < ms.Length)
+                while (ms.Position + 12 <= ms.Length)
                 {
-                    vectors.Add(new Vector2(br.ReadSingle(), br.ReadSingle()));
-                    ms.Position += 4; // skip old Z
+                    float x = br.ReadSingle();
+                    float y = br.ReadSingle();
+                    vectors.Add(new Vector2(x, y));
+                    ms.Position += 8; // skip old Z and A
                 }
-            }
 
-            using (var ms = new MemoryStream(pixelData))
+            // write into a fresh, expandable buffer of the same size
+            byte[] outData = new byte[pixelData.Length];
+            using (var ms = new MemoryStream(outData))
             using (var bw = new BinaryWriter(ms))
-            {
                 foreach (var v in vectors)
                 {
-                    float z = MathF.Sqrt(1 - Vector2.Dot(v, v));
+                    float z = MathF.Sqrt(MathF.Max(0, 1 - Vector2.Dot(v, v)));
                     bw.Write(pack ? MathF.Pow((v.Y + 1) / 2, 2.2f) : v.Y);
                     bw.Write(pack ? MathF.Pow((v.X + 1) / 2, 2.2f) : v.X);
                     bw.Write(pack ? MathF.Pow((z + 1) / 2, 2.2f) : z);
                     bw.Write(1.0f);
                 }
-            }
-            return pixelData;
+
+            return outData;
         }
 
         public static byte[] MergeAlpha(byte[] pixelData, byte[] alphaPixelData)
@@ -271,22 +271,18 @@ namespace KCDTextureExporter
             var colors = new List<Vector4>();
             using (var ms = new MemoryStream(pixelData))
             using (var br = new BinaryReader(ms))
-            {
-                while (br.BaseStream.Position < br.BaseStream.Length)
+                while (ms.Position < ms.Length)
                     colors.Add(new Vector4(
                         br.ReadSingle(),
                         br.ReadSingle(),
                         br.ReadSingle(),
                         br.ReadSingle()));
-            }
 
             var alphas = new List<float>();
             using (var ms = new MemoryStream(alphaPixelData))
             using (var br = new BinaryReader(ms))
-            {
-                while (br.BaseStream.Position < br.BaseStream.Length)
+                while (ms.Position < ms.Length)
                     alphas.Add(br.ReadSingle());
-            }
 
             using (var ms = new MemoryStream(pixelData))
             using (var bw = new BinaryWriter(ms))
@@ -311,10 +307,10 @@ namespace KCDTextureExporter
 
             while (inMs.Position < inMs.Length)
             {
-                float r = br.ReadSingle(),
-                      g = br.ReadSingle(),
-                      b = br.ReadSingle(),
-                      a = br.ReadSingle();
+                float r = br.ReadSingle();
+                float g = br.ReadSingle();
+                float b = br.ReadSingle();
+                float a = br.ReadSingle();
 
                 if (isSRGB)
                 {
