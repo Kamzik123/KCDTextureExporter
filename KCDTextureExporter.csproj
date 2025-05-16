@@ -7,10 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <Platforms>AnyCPU;x64;x86</Platforms>
-	<!--<IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>-->
+	<IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
 	<ApplicationIcon>KCDTextureConverter.ico</ApplicationIcon>
 	<AssemblyVersion>1.0.6</AssemblyVersion>
-	<FileVersion>1.0.6</FileVersion>
+	<FileVersion>1.0.7</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
