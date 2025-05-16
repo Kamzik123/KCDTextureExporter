@@ -210,6 +210,15 @@ namespace KCDTextureExporter
                     bw.Write(alphaDDS.Data!);
                     alphaDDS.Data = ms.ToArray();
                 }
+
+                int alphaExpectedSize = ComputePixelDataSize(
+                alphaDDS.Header.GetPixelFormat(),
+                alphaDDS.Header.Width,
+                alphaDDS.Header.Height,
+                alphaDDS.Header.MipMapCount);
+                    if (alphaDDS.Data.Length < alphaExpectedSize)
+                        throw new Exception("Failed to load all necessary alpha MIP levels.");
+
                 var data = alphaDDS.Write();
                 var h = GCHandle.Alloc(data, GCHandleType.Pinned);
                 try
