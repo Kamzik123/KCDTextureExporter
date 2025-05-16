@@ -182,6 +182,14 @@ namespace KCDTextureExporter
                 ddsFile.Data = ms.ToArray();
             }
 
+            int expectedSize = ComputePixelDataSize(
+            ddsFile.Header.GetPixelFormat(),
+            ddsFile.Header.Width,
+            ddsFile.Header.Height,
+            ddsFile.Header.MipMapCount);
+                    if (ddsFile.Data.Length < expectedSize)
+                        throw new Exception("Failed to load all necessary MIP levels.");
+
             if (saveRawDDS)
             {
                 string tgt = isOutputFolder
@@ -239,10 +247,10 @@ namespace KCDTextureExporter
         public static byte[] ReconstructZ(byte[] pixelData, bool pack)
         {
             var vectors = new List<Vector2>();
-            // read only when at least 12 bytes remain (8 for X/Y + skip Z+W)
+            // read only when at least 16 bytes remain (4 X + 4 Y + 4 Z + 4 A)
             using (var ms = new MemoryStream(pixelData))
             using (var br = new BinaryReader(ms))
-                while (ms.Position + 12 <= ms.Length)
+                while (ms.Position + 16 <= ms.Length)
                 {
                     float x = br.ReadSingle();
                     float y = br.ReadSingle();
