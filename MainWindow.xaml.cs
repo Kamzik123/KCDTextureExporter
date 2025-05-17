@@ -50,128 +50,86 @@ namespace KCDTextureExporter
             ReadSettingsFile();
         }
 
-        private void Button_Convert_Click(object sender, RoutedEventArgs e)
+        private async void Button_Convert_Click(object sender, RoutedEventArgs e)
         {
-            try
+            string inputPath = TextBox_Input.Text.Trim();
+            bool isRecursive = CheckBox_Recursive.IsChecked == true;
+            bool isFolder = Directory.Exists(inputPath);
+            bool isFileDDS = File.Exists(inputPath) && inputPath.EndsWith(".dds", StringComparison.OrdinalIgnoreCase);
+
+            if (!isFolder && !isFileDDS)
+                throw new Exception("Input path invalid or no .dds files found.");
+
+            // Non-recursive, check DDS exists first.
+            if (isFolder && !isRecursive)
             {
-                bool IsInputFolder = false;
-                bool IsOutputFolder = false;
-
-                if (Directory.Exists(TextBox_Input.Text))
-                {
-                    IsInputFolder = true;
-                }
-
-                if (Directory.Exists(TextBox_Output.Text))
-                {
-                    IsOutputFolder = true;
-                }
-
-                if (!IsOutputFolder)
-                {
-                    if (!string.IsNullOrEmpty(TextBox_Output.Text) && !TextBox_Output.Text.EndsWith(".dds", StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        IsOutputFolder = true;
-
-                        if (!Directory.Exists(TextBox_Output.Text))
-                        {
-                            Directory.CreateDirectory(TextBox_Output.Text);
-                        }
-                    }
-                }
-
-                if (string.IsNullOrEmpty(TextBox_Output.Text))
-                {
-                    IsOutputFolder = true;
-                }
-
-                if (IsInputFolder && !IsOutputFolder)
-                {
-                    throw new Exception("When an input folder is specified, you must specify an output folder instead of a file.");
-                }
-
-                if (IsInputFolder)
-                {
-                    var ddsFiles = Directory.EnumerateFiles(TextBox_Input.Text, "*.dds", (bool)CheckBox_Recursive.IsChecked! ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
-
-                    if (!ddsFiles.Any())
-                    {
-                        throw new Exception("No .dds files were found in the selected input folder.");
-                    }
-
-                    Button_Convert.IsEnabled = false;
-
-                    List<Task> tasks = BatchProcessFiles(TextBox_Input.Text, TextBox_Output.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, (bool)CheckBox_DeleteSourceFiles.IsChecked!, (bool)CheckBox_Recursive.IsChecked!);
-
-                    Task.WhenAll(tasks).ContinueWith(tasks =>
-                    {
-                        Button_Convert.Dispatcher.Invoke(() =>
-                        {
-                            Button_Convert.IsEnabled = true;
-                        });
-
-                        this.Dispatcher.Invoke(() =>
-                        {
-                            FlashWindow();
-                        });
-                    });
-                }
-                else
-                {
-                    ConvertImageStatic(TextBox_Input.Text, (bool)CheckBox_SaveRawDDS.IsChecked!, (bool)CheckBox_SeparateGlossMap.IsChecked!, TextBox_Output.Text, (bool)CheckBox_DeleteSourceFiles.IsChecked!, IsOutputFolder);
-                }
-
-                GC.Collect();
+                if (!Directory.EnumerateFiles(inputPath, "*.dds", SearchOption.TopDirectoryOnly).Any())
+                    throw new Exception("No .dds files found in the input folder.");
             }
-            catch (Exception ex)
+
+            Button_Convert.IsEnabled = false;
+
+            if (isFolder)
             {
-                MessageBox.Show(ex.Message, "Error");
+                var tasks = BatchProcessFiles( inputPath, TextBox_Output.Text, CheckBox_SaveRawDDS.IsChecked == true, CheckBox_SeparateGlossMap.IsChecked == true, CheckBox_DeleteSourceFiles.IsChecked == true, isRecursive);
+
+                if (!tasks.Any())
+                    throw new Exception("No .dds files found in the input folder or its subfolders.");
+
+                await Task.WhenAll(tasks);
             }
+            else // single file
+            {
+                ConvertImageStatic( inputPath, CheckBox_SaveRawDDS.IsChecked == true, CheckBox_SeparateGlossMap.IsChecked == true, TextBox_Output.Text, CheckBox_DeleteSourceFiles.IsChecked == true, !TextBox_Output.Text.EndsWith(".tif", StringComparison.OrdinalIgnoreCase));
+            }
+
+            FlashWindow();
+            Button_Convert.IsEnabled = true;
         }
 
         public List<Task> BatchProcessFiles(string inputFolder, string outputFolder, bool saveRawDDS, bool separateGlossMap, bool deleteSourceFiles, bool recursive)
         {
-            List<Task> tasks = new();
+            var option = recursive
+                ? SearchOption.AllDirectories
+                : SearchOption.TopDirectoryOnly;
 
-            foreach (var file in Directory.EnumerateFiles(inputFolder, "*.dds"))
+            // Find all .dds files including sub folders
+            var ddsFiles = Directory.EnumerateFiles(inputFolder, "*.dds", option).ToList();
+
+            if (!ddsFiles.Any())
+                throw new Exception("No .dds files were found in the selected input folder (or its subfolders).");
+
+            var tasks = new List<Task>();
+
+            foreach (var file in ddsFiles)
             {
-                try
+                if (recursive)
                 {
+                    // Compute the sub-path under inputFolder
+                    var subDir = Path.GetRelativePath(
+                        inputFolder,
+                        Path.GetDirectoryName(file) ?? string.Empty);
+
+                    // Build the matching folder under outputFolder
+                    var destDir = Path.Combine(outputFolder, subDir);
+                    Directory.CreateDirectory(destDir);
+
                     tasks.Add(Task.Run(() =>
-                    {
-                        ConvertImageStatic(file, saveRawDDS, separateGlossMap, outputFolder, deleteSourceFiles, true);
-                        GC.Collect();
-                    }));
+                        ConvertImageStatic(file, saveRawDDS, separateGlossMap, destDir, deleteSourceFiles,true)
+                    ));
                 }
-                catch (Exception ex)
+                else
                 {
-                    MessageBox.Show($"Failed to convert {Path.GetFileName(file)}, it will be skipped.\nError: {ex.Message}", "Error");
-                    continue;
-                }
-            }
-
-            if (recursive)
-            {
-                foreach (var dir in Directory.EnumerateDirectories(inputFolder))
-                {
-                    string newOutputPath = "";
-
-                    if (!string.IsNullOrEmpty(outputFolder))
-                    {
-                        newOutputPath = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(dir)!);
-
-                        if (!Directory.Exists(newOutputPath))
-                        {
-                            Directory.CreateDirectory(newOutputPath);
-                        }
-                    }
-
-                    tasks.AddRange(BatchProcessFiles(dir, newOutputPath, saveRawDDS, separateGlossMap, deleteSourceFiles, recursive));
+                    // Non-recursive
+                    tasks.Add(Task.Run(() =>
+                        ConvertImageStatic(file, saveRawDDS, separateGlossMap, outputFolder, deleteSourceFiles, true)
+                    ));
                 }
             }
 
             return tasks;
         }
+
 
         private void Button_InputPicker_Click(object sender, RoutedEventArgs e)
         {
